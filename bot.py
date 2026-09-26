@@ -47,8 +47,8 @@ except Exception as e:
 
 
 
-def call_gemini(prompt: str, max_tokens: int = 1500) -> str:
-    """Gọi model nhanh nhất và tối ưu token (mặc định cho phép tới 1500 tokens để chi tiết hơn)"""
+def call_gemini(prompt: str, max_tokens: int = 600) -> str:
+    """Gọi model nhanh nhất và tối ưu token (giới hạn 600 tokens để tóm tắt ngắn gọn)"""
     global genai_client
     
     current_key = os.getenv("GEMINI_API_KEY")
@@ -152,45 +152,24 @@ async def process_summarize(channel: discord.TextChannel, duration_str: str, req
         )
 
     chat_logs = "\n".join(messages)
-    is_long_period = delta >= timedelta(hours=1)
 
-    # Tùy chỉnh độ chi tiết theo khoảng thời gian
-    if is_long_period:
-        prompt = f"""Bạn là trợ lý AI tóm tắt Discord chuyên nghiệp. Hãy đọc và tóm tắt CHI TIẾT đoạn trò chuyện trong {readable_time} vừa qua ({len(messages)} tin nhắn).
-Vì đây là khoảng thời gian dài, hãy cung cấp bản tóm tắt ĐẦY ĐỦ THÔNG TIN, rõ ràng, không tóm lược sơ sài hay cụt ngủn:
+    # Prompt chuẩn hóa: ngắn gọn, vừa đủ ý chính, không bị dài dòng
+    prompt = f"""Bạn là trợ lý AI tóm tắt Discord. Hãy đọc và tóm tắt đoạn trò chuyện trong {readable_time} vừa qua ({len(messages)} tin nhắn).
+Yêu cầu: Viết tiếng Việt ngắn gọn, súc tích, đi thẳng vào trọng tâm (khoảng 150 - 250 từ), không dài dòng:
 
-1. 📌 **Tổng quan cuộc trò chuyện**: Tóm tắt 1-2 câu về bối cảnh và các chủ đề bao quát được trao đổi.
-2. 💬 **Diễn biến & Nội dung chi tiết**:
-   - Chia thành các sự việc / nhóm chủ đề cụ thể diễn ra trong khoảng thời gian này.
-   - Ghi rõ tên thành viên (`**[Tên]**`) đã nói gì, thảo luận gì, có câu chuyện hài hước, tranh luận, rủ rê hay sự kiện gì đáng chú ý.
-   - Giữ lại các chi tiết quan trọng và ngữ cảnh để người không theo dõi kênh vẫn nắm rõ diễn biến.
-3. 📋 **Quyết định, Kèo hẹn & Việc cần làm (To-Do)**: Liệt kê các kèo hẹn (chơi game, đi chơi...), quyết định đã chốt, hoặc việc ai phải làm (nếu không có thì ghi "Không có").
+1. 📌 **Chủ đề chính**: Tóm tắt 1 câu ngắn gọn về việc mọi người đang bàn luận.
+2. 💬 **Điểm nổi bật**: 3 - 5 gạch đầu dòng cô đọng nhất các ý kiến hoặc sự việc đáng chú ý (nêu tên người nếu quan trọng).
+3. 📋 **Kèo hẹn / Việc cần làm**: Kèo đi chơi, chơi game, việc cần làm (nếu có, không có ghi "Không có").
 
 Đoạn chat:
 ---
 {chat_logs}
----
+---"""
 
-Yêu cầu: Viết bằng tiếng Việt tự nhiên, đầy đủ chiều sâu (khoảng 350 - 650 từ), giữ phong cách trò chuyện vui vẻ, trình bày Markdown đẹp mắt."""
-        max_tokens = 1500
-    else:
-        prompt = f"""Bạn là trợ lý AI tóm tắt Discord. Hãy tóm tắt đoạn trò chuyện trong {readable_time} vừa qua ({len(messages)} tin nhắn):
-
-1. 📌 **Chủ đề chính**: Tóm tắt 1-2 câu về chủ đề thảo luận.
-2. 💬 **Chi tiết thảo luận**: Gạch đầu dòng cụ thể các ý kiến, ai nói gì (`**[Tên]**`), những điểm thảo luận nổi bật.
-3. 📋 **Kết luận / Việc cần làm**: Quyết định hoặc việc cần làm (nếu có).
-
-Đoạn chat:
----
-{chat_logs}
----
-
-Yêu cầu: Viết tiếng Việt rõ ràng, đầy đủ ý chính, không quá ngắn (khoảng 200 - 350 từ)."""
-        max_tokens = 800
-
-    summary_text = call_gemini(prompt, max_tokens=max_tokens)
+    summary_text = call_gemini(prompt, max_tokens=600)
     if not summary_text:
         summary_text = "⚠️ Không nhận được phản hồi từ AI."
+
 
     # Giới hạn nội dung hiển thị trong 1 Embed duy nhất (Discord cho phép tối đa 4096 ký tự)
     if len(summary_text) > 3900:
