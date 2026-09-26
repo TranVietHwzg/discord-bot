@@ -214,6 +214,22 @@ intents.message_content = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 
+async def start_web_server():
+    """Chạy web server nhỏ để Render nhận diện port và kiểm tra trạng thái sống"""
+    from aiohttp import web
+    app = web.Application()
+    async def index(request):
+        return web.Response(text="Bot Discord Ueh-TomTat is running 24/7!")
+    app.router.add_get("/", index)
+    app.router.add_get("/health", index)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🌐 Web server keep-alive đang chạy tại port {port}")
+
+
 @bot.event
 async def on_ready():
     print(f"✅ Bot đã kết nối thành công: {bot.user}")
@@ -226,8 +242,11 @@ async def on_ready():
         print("⚡ Đã đồng bộ slash command /tomtat")
     except Exception as e:
         print(f"Lỗi sync: {e}")
+
     print("---------------------------------------------")
     print("👉 Bot sẵn sàng! Chỉ phản hồi đúng 1 tin nhắn duy nhất.")
+
+
 
 
 @bot.event
@@ -274,13 +293,21 @@ async def on_message(message: discord.Message):
             print(f"✅ Đã gửi tóm tắt thành công vào #{message.channel.name}!")
         return
 
-    # Lệnh prefix
-    await bot.process_commands(message)
+async def main():
+    if not DISCORD_TOKEN or DISCORD_TOKEN == "your_discord_bot_token_here":
+        print("❌ Chưa cấu hình DISCORD_TOKEN trong .env!")
+        return
 
+    try:
+        await start_web_server()
+    except Exception as e:
+        print(f"Lỗi khởi động web server: {e}")
+
+    async with bot:
+        await bot.start(DISCORD_TOKEN)
 
 
 if __name__ == "__main__":
-    if not DISCORD_TOKEN or DISCORD_TOKEN == "your_discord_bot_token_here":
-        print("❌ Chưa cấu hình DISCORD_TOKEN trong .env!")
-    else:
-        bot.run(DISCORD_TOKEN)
+    import asyncio
+    asyncio.run(main())
+
