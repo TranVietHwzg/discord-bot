@@ -157,14 +157,50 @@ async def process_summarize(channel: discord.TextChannel, duration_str: str, req
 
     chat_logs = "\n".join(messages)
 
-    # Prompt chuẩn hóa JSON theo hướng dẫn Prompt Engineering chuyên nghiệp
-    prompt = f"""Bạn là chuyên gia phân tích và tóm tắt hội thoại nhóm Discord.
-Nhiệm vụ của bạn là đọc toàn bộ đoạn chat trong {readable_time} vừa qua ({len(messages)} tin nhắn) và xuất ra bản tóm tắt CHÍNH XÁC, NGẮN GỌN, KHÔNG BỊA ĐẶT THÔNG TIN.
+    chat_logs = "\n".join(messages)
+    is_detailed_mode = delta >= timedelta(minutes=45)
+
+    if is_detailed_mode:
+        # BẢN CHI TIẾT (2B) cho thời gian >= 45 phút: Tường thuật theo dòng thời gian, trích dẫn, mốc giờ
+        prompt = f"""Bạn là chuyên gia phân tích và tóm tắt hội thoại nhóm Discord.
+Nhiệm vụ của bạn là đọc toàn bộ đoạn chat trong {readable_time} vừa qua ({len(messages)} tin nhắn) và tạo bản tóm tắt CHI TIẾT, CHÍNH XÁC, KHÔNG BỊA ĐẶT THÔNG TIN.
 
 Yêu cầu nghiêm ngặt:
 1. Chỉ sử dụng thông tin có trong đoạn chat, không tự suy đoán hay thêm thắt.
 2. Giữ nguyên tên riêng (người nói), số liệu, mốc thời gian, tên game nếu có.
-3. Không lặp lại nguyên văn tin nhắn, diễn đạt cô đọng bằng tiếng Việt tự nhiên (khoảng 150 - 250 từ).
+3. Trường "tuong_thuat_dien_bien": viết như một đoạn tường thuật đầy đủ, bám theo ĐÚNG TRÌNH TỰ diễn biến (ai bắt đầu hỏi/nói gì trước, mọi người trao đổi/tranh luận ra sao ở giữa, kết thúc thế nào). Viết đủ dài (6-10 câu), để người đọc không cần lội lại chat vẫn hiểu toàn bộ câu chuyện.
+4. Trường "trich_dan_dang_chu_y": chọn ra 1-3 câu nói nguyên văn then chốt, hài hước, hoặc câu chốt kèo của thành viên. Nếu không có câu nào đặc biệt, để mảng rỗng [].
+5. Trường "moc_thoi_gian": liệt kê 2-4 mốc thời điểm đáng chú ý nhất khi có sự thay đổi chủ đề hoặc sự kiện lớn (kèm timestamp nếu có).
+6. Trả lời DUY NHẤT bằng JSON hợp lệ theo đúng cấu trúc sau:
+{{
+  "boi_canh": "Bối cảnh mở đầu cuộc trò chuyện (1-2 câu)",
+  "tuong_thuat_dien_bien": "Tường thuật đầy đủ diễn biến theo đúng trình tự thời gian (6-10 câu)",
+  "moc_thoi_gian": [
+    {{"thoi_diem": "VD: 20:15", "su_kien": "Bắt đầu rủ chơi game"}}
+  ],
+  "trich_dan_dang_chu_y": [
+    "Câu nói nguyên văn đáng chú ý 1"
+  ],
+  "keo_va_quyet_dinh": [
+    "Liệt kê các kèo chơi game, hẹn giờ, việc đã chốt (để [] nếu không có)"
+  ],
+  "khong_khi": "Vui vẻ / Tranh luận / Sôi nổi / Bình thường"
+}}
+
+Đoạn chat cần tóm tắt:
+\"\"\"
+{chat_logs}
+\"\"\""""
+        max_tokens = 1500
+    else:
+        # BẢN CƠ BẢN (2A) cho thời gian < 45 phút: Ngắn gọn, 3-5 gạch đầu dòng
+        prompt = f"""Bạn là chuyên gia phân tích và tóm tắt hội thoại nhóm Discord.
+Nhiệm vụ của bạn là đọc toàn bộ đoạn chat trong {readable_time} vừa qua ({len(messages)} tin nhắn) và tạo bản tóm tắt CHÍNH XÁC, NGẮN GỌN, KHÔNG BỊA ĐẶT THÔNG TIN.
+
+Yêu cầu nghiêm ngặt:
+1. Chỉ sử dụng thông tin có trong đoạn chat, không tự suy đoán hay thêm thắt.
+2. Giữ nguyên tên riêng (người nói), số liệu, mốc thời gian, tên game nếu có.
+3. Không lặp lại nguyên văn tin nhắn, diễn đạt cô đọng bằng tiếng Việt tự nhiên (khoảng 100 - 200 từ).
 4. Trả lời DUY NHẤT bằng JSON hợp lệ theo đúng cấu trúc sau:
 {{
   "chu_de_chinh": "Tóm tắt 1 câu bao quát về nội dung mọi người đã bàn luận",
@@ -174,7 +210,7 @@ Yêu cầu nghiêm ngặt:
     "Ý chính 3 (tối đa 3 - 5 ý ngắn gọn)"
   ],
   "keo_va_quyet_dinh": [
-    "Liệt kê các kèo chơi game, hẹn giờ, việc đã chốt (để mảng rỗng [] nếu không có)"
+    "Liệt kê các kèo chơi game, hẹn giờ, việc đã chốt (để [] nếu không có)"
   ],
   "khong_khi": "Vui vẻ / Tranh luận / Sôi nổi / Bình thường"
 }}
@@ -183,8 +219,9 @@ Yêu cầu nghiêm ngặt:
 \"\"\"
 {chat_logs}
 \"\"\""""
+        max_tokens = 700
 
-    summary_raw = call_gemini(prompt, max_tokens=800, response_mime_type="application/json")
+    summary_raw = call_gemini(prompt, max_tokens=max_tokens, response_mime_type="application/json")
     
     # Parse JSON an toàn
     data = None
@@ -196,41 +233,85 @@ Yêu cầu nghiêm ngặt:
         print(f"Lỗi parse JSON: {e}")
 
     embed = discord.Embed(
-        title=f"📝 Tóm tắt #{channel.name} ({readable_time} vừa qua)",
-        color=discord.Color.blue(),
+        title=f"📝 Tóm tắt #{channel.name} ({readable_time} vừa qua)" if not is_detailed_mode else f"📜 Tường thuật chi tiết #{channel.name} ({readable_time} vừa qua)",
+        color=discord.Color.blue() if not is_detailed_mode else discord.Color.purple(),
         timestamp=datetime.now(timezone.utc),
     )
 
     if data and isinstance(data, dict):
-        chu_de = data.get("chu_de_chinh", "").strip()
-        if chu_de:
-            embed.add_field(name="📌 Chủ đề chính", value=chu_de[:1024], inline=False)
+        if is_detailed_mode:
+            # Hiển thị cho Bản Chi Tiết (2B)
+            boi_canh = data.get("boi_canh", "").strip()
+            if boi_canh:
+                embed.add_field(name="📌 Bối cảnh mở đầu", value=boi_canh[:1024], inline=False)
 
-        dien_bien = data.get("dien_bien_chinh", [])
-        if isinstance(dien_bien, list) and dien_bien:
-            val = "\n".join(f"• {x}" for x in dien_bien if str(x).strip())
-            if val:
-                embed.add_field(name="💬 Diễn biến nổi bật", value=val[:1024], inline=False)
-        elif isinstance(dien_bien, str) and dien_bien.strip():
-            embed.add_field(name="💬 Diễn biến nổi bật", value=dien_bien[:1024], inline=False)
+            tuong_thuat = data.get("tuong_thuat_dien_bien", "").strip()
+            if tuong_thuat:
+                embed.add_field(name="📖 Diễn biến theo dòng sự kiện", value=tuong_thuat[:1024], inline=False)
 
-        keo = data.get("keo_va_quyet_dinh", [])
-        if isinstance(keo, list) and keo:
-            val = "\n".join(f"• {x}" for x in keo if str(x).strip())
-            if val:
-                embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=val[:1024], inline=False)
-        elif isinstance(keo, str) and keo.strip() and keo.strip().lower() != "không có":
-            embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=keo[:1024], inline=False)
+            moc_tg = data.get("moc_thoi_gian", [])
+            if isinstance(moc_tg, list) and moc_tg:
+                lines = []
+                for item in moc_tg[:5]:
+                    if isinstance(item, dict):
+                        td = item.get("thoi_diem", "")
+                        sk = item.get("su_kien", "")
+                        lines.append(f"⏱️ **`{td}`**: {sk}")
+                    elif isinstance(item, str):
+                        lines.append(f"• {item}")
+                if lines:
+                    embed.add_field(name="⏰ Mốc thời gian nổi bật", value="\n".join(lines)[:1024], inline=False)
 
-        khong_khi = data.get("khong_khi", "").strip()
-        if khong_khi:
-            embed.add_field(name="🎭 Không khí", value=khong_khi[:256], inline=True)
+            trich_dan = data.get("trich_dan_dang_chu_y", [])
+            if isinstance(trich_dan, list) and trich_dan:
+                quotes = [f"> *\"{q.strip()}\"*" for q in trich_dan if str(q).strip()]
+                if quotes:
+                    embed.add_field(name="💬 Trích dẫn đáng chú ý", value="\n".join(quotes)[:1024], inline=False)
+
+            keo = data.get("keo_va_quyet_dinh", [])
+            if isinstance(keo, list) and keo:
+                val = "\n".join(f"• {x}" for x in keo if str(x).strip())
+                if val:
+                    embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=val[:1024], inline=False)
+            elif isinstance(keo, str) and keo.strip() and keo.strip().lower() != "không có":
+                embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=keo[:1024], inline=False)
+
+            khong_khi = data.get("khong_khi", "").strip()
+            if khong_khi:
+                embed.add_field(name="🎭 Không khí trò chuyện", value=khong_khi[:256], inline=True)
+        else:
+            # Hiển thị cho Bản Cơ Bản (2A)
+            chu_de = data.get("chu_de_chinh", "").strip()
+            if chu_de:
+                embed.add_field(name="📌 Chủ đề chính", value=chu_de[:1024], inline=False)
+
+            dien_bien = data.get("dien_bien_chinh", [])
+            if isinstance(dien_bien, list) and dien_bien:
+                val = "\n".join(f"• {x}" for x in dien_bien if str(x).strip())
+                if val:
+                    embed.add_field(name="💬 Diễn biến nổi bật", value=val[:1024], inline=False)
+            elif isinstance(dien_bien, str) and dien_bien.strip():
+                embed.add_field(name="💬 Diễn biến nổi bật", value=dien_bien[:1024], inline=False)
+
+            keo = data.get("keo_va_quyet_dinh", [])
+            if isinstance(keo, list) and keo:
+                val = "\n".join(f"• {x}" for x in keo if str(x).strip())
+                if val:
+                    embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=val[:1024], inline=False)
+            elif isinstance(keo, str) and keo.strip() and keo.strip().lower() != "không có":
+                embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=keo[:1024], inline=False)
+
+            khong_khi = data.get("khong_khi", "").strip()
+            if khong_khi:
+                embed.add_field(name="🎭 Không khí", value=khong_khi[:256], inline=True)
     else:
         # Fallback nếu JSON bị lỗi thì hiển thị văn bản thuần
         embed.description = summary_raw[:3900]
 
-    embed.set_footer(text=f"Yêu cầu bởi {requester.display_name} • Đã phân tích {len(messages)} tin nhắn")
+    mode_label = "Chi tiết (2B)" if is_detailed_mode else "Cơ bản (2A)"
+    embed.set_footer(text=f"Yêu cầu bởi {requester.display_name} • Đã phân tích {len(messages)} tin nhắn • Chế độ {mode_label}")
     return embed
+
 
 
 
