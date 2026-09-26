@@ -401,7 +401,12 @@ async def on_message(message: discord.Message):
             print(f"✅ Đã gửi tóm tắt thành công vào #{message.channel.name}!")
         return
 
+    # Xử lý các lệnh có tiền tố (như !tomtat)
+    await bot.process_commands(message)
+
+
 async def main():
+
     if not DISCORD_TOKEN or DISCORD_TOKEN == "your_discord_bot_token_here":
         print("❌ Chưa cấu hình DISCORD_TOKEN trong .env!")
         return
