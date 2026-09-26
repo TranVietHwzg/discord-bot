@@ -1,12 +1,14 @@
 import os
 import sys
 import re
+import json
 import socket
 from datetime import datetime, timedelta, timezone
 import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+
 
 # Đảm bảo in tiếng Việt / emoji trên Windows console và tự động flush log
 if hasattr(sys.stdout, "reconfigure"):
@@ -47,8 +49,8 @@ except Exception as e:
 
 
 
-def call_gemini(prompt: str, max_tokens: int = 600) -> str:
-    """Gọi model nhanh nhất và tối ưu token (giới hạn 600 tokens để tóm tắt ngắn gọn)"""
+def call_gemini(prompt: str, max_tokens: int = 800, response_mime_type: str = "application/json") -> str:
+    """Gọi model nhanh nhất và tối ưu token theo định dạng JSON"""
     global genai_client
     
     current_key = os.getenv("GEMINI_API_KEY")
@@ -74,7 +76,8 @@ def call_gemini(prompt: str, max_tokens: int = 600) -> str:
         try:
             config = types.GenerateContentConfig(
                 max_output_tokens=max_tokens,
-                temperature=0.3,
+                temperature=0.2,
+                response_mime_type=response_mime_type,
             )
             response = genai_client.models.generate_content(
                 model=model_name,
@@ -88,6 +91,7 @@ def call_gemini(prompt: str, max_tokens: int = 600) -> str:
             continue
 
     return f"❌ Lỗi khi gọi AI: {last_error}"
+
 
 
 def parse_duration(time_str: str) -> tuple[timedelta | None, str]:
@@ -153,37 +157,81 @@ async def process_summarize(channel: discord.TextChannel, duration_str: str, req
 
     chat_logs = "\n".join(messages)
 
-    # Prompt chuẩn hóa: ngắn gọn, vừa đủ ý chính, không bị dài dòng
-    prompt = f"""Bạn là trợ lý AI tóm tắt Discord. Hãy đọc và tóm tắt đoạn trò chuyện trong {readable_time} vừa qua ({len(messages)} tin nhắn).
-Yêu cầu: Viết tiếng Việt ngắn gọn, súc tích, đi thẳng vào trọng tâm (khoảng 150 - 250 từ), không dài dòng:
+    # Prompt chuẩn hóa JSON theo hướng dẫn Prompt Engineering chuyên nghiệp
+    prompt = f"""Bạn là chuyên gia phân tích và tóm tắt hội thoại nhóm Discord.
+Nhiệm vụ của bạn là đọc toàn bộ đoạn chat trong {readable_time} vừa qua ({len(messages)} tin nhắn) và xuất ra bản tóm tắt CHÍNH XÁC, NGẮN GỌN, KHÔNG BỊA ĐẶT THÔNG TIN.
 
-1. 📌 **Chủ đề chính**: Tóm tắt 1 câu ngắn gọn về việc mọi người đang bàn luận.
-2. 💬 **Điểm nổi bật**: 3 - 5 gạch đầu dòng cô đọng nhất các ý kiến hoặc sự việc đáng chú ý (nêu tên người nếu quan trọng).
-3. 📋 **Kèo hẹn / Việc cần làm**: Kèo đi chơi, chơi game, việc cần làm (nếu có, không có ghi "Không có").
+Yêu cầu nghiêm ngặt:
+1. Chỉ sử dụng thông tin có trong đoạn chat, không tự suy đoán hay thêm thắt.
+2. Giữ nguyên tên riêng (người nói), số liệu, mốc thời gian, tên game nếu có.
+3. Không lặp lại nguyên văn tin nhắn, diễn đạt cô đọng bằng tiếng Việt tự nhiên (khoảng 150 - 250 từ).
+4. Trả lời DUY NHẤT bằng JSON hợp lệ theo đúng cấu trúc sau:
+{{
+  "chu_de_chinh": "Tóm tắt 1 câu bao quát về nội dung mọi người đã bàn luận",
+  "dien_bien_chinh": [
+    "Ý chính 1 (kèm tên người nói nếu quan trọng)",
+    "Ý chính 2",
+    "Ý chính 3 (tối đa 3 - 5 ý ngắn gọn)"
+  ],
+  "keo_va_quyet_dinh": [
+    "Liệt kê các kèo chơi game, hẹn giờ, việc đã chốt (để mảng rỗng [] nếu không có)"
+  ],
+  "khong_khi": "Vui vẻ / Tranh luận / Sôi nổi / Bình thường"
+}}
 
-Đoạn chat:
----
+Đoạn chat cần tóm tắt:
+\"\"\"
 {chat_logs}
----"""
+\"\"\""""
 
-    summary_text = call_gemini(prompt, max_tokens=600)
-    if not summary_text:
-        summary_text = "⚠️ Không nhận được phản hồi từ AI."
-
-
-    # Giới hạn nội dung hiển thị trong 1 Embed duy nhất (Discord cho phép tối đa 4096 ký tự)
-    if len(summary_text) > 3900:
-        summary_text = summary_text[:3900] + "\n\n*(Xem thêm ở lịch sử chat...)*"
+    summary_raw = call_gemini(prompt, max_tokens=800, response_mime_type="application/json")
+    
+    # Parse JSON an toàn
+    data = None
+    try:
+        cleaned = re.sub(r"^```(?:json)?\s*", "", summary_raw.strip(), flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        data = json.loads(cleaned)
+    except Exception as e:
+        print(f"Lỗi parse JSON: {e}")
 
     embed = discord.Embed(
         title=f"📝 Tóm tắt #{channel.name} ({readable_time} vừa qua)",
-        description=summary_text,
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
 
+    if data and isinstance(data, dict):
+        chu_de = data.get("chu_de_chinh", "").strip()
+        if chu_de:
+            embed.add_field(name="📌 Chủ đề chính", value=chu_de[:1024], inline=False)
+
+        dien_bien = data.get("dien_bien_chinh", [])
+        if isinstance(dien_bien, list) and dien_bien:
+            val = "\n".join(f"• {x}" for x in dien_bien if str(x).strip())
+            if val:
+                embed.add_field(name="💬 Diễn biến nổi bật", value=val[:1024], inline=False)
+        elif isinstance(dien_bien, str) and dien_bien.strip():
+            embed.add_field(name="💬 Diễn biến nổi bật", value=dien_bien[:1024], inline=False)
+
+        keo = data.get("keo_va_quyet_dinh", [])
+        if isinstance(keo, list) and keo:
+            val = "\n".join(f"• {x}" for x in keo if str(x).strip())
+            if val:
+                embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=val[:1024], inline=False)
+        elif isinstance(keo, str) and keo.strip() and keo.strip().lower() != "không có":
+            embed.add_field(name="📋 Kèo hẹn & Việc cần làm", value=keo[:1024], inline=False)
+
+        khong_khi = data.get("khong_khi", "").strip()
+        if khong_khi:
+            embed.add_field(name="🎭 Không khí", value=khong_khi[:256], inline=True)
+    else:
+        # Fallback nếu JSON bị lỗi thì hiển thị văn bản thuần
+        embed.description = summary_raw[:3900]
+
     embed.set_footer(text=f"Yêu cầu bởi {requester.display_name} • Đã phân tích {len(messages)} tin nhắn")
     return embed
+
 
 
 # Thiết lập Intents
