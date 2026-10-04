@@ -734,7 +734,7 @@ async def slash_relationship_end(interaction: discord.Interaction, target: disco
 
 
 # Đăng ký relationship_group vào bot tree
-bot.tree.add_group(relationship_group)
+bot.tree.add_command(relationship_group)
 
 
 # 5. KÍCH HOẠT KHI NHẬN TIN NHẮN HOẶC TAG @BOT (Chỉ gửi duy nhất 1 Embed)
