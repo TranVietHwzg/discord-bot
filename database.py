@@ -107,6 +107,17 @@ class DatabaseRepository:
             );
             """)
 
+            # 4. Bang flirt_history (metadata chong lap y theo guild)
+            cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS flirt_history (
+                {id_col},
+                guild_id BIGINT NOT NULL,
+                signature VARCHAR(255) NOT NULL,
+                topic VARCHAR(32) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+
             conn.commit()
             print("[Database] Schema initialized successfully.")
         except Exception as e:
@@ -372,3 +383,45 @@ class DatabaseRepository:
             cursor.close()
             if self.is_postgres:
                 conn.close()
+
+    def record_flirt_history(self, guild_id: int, signature: str, topic: str = "generic"):
+        """Luu signature cua cau flirt de chong lap y theo guild."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            sql = self._convert_sql("""
+                INSERT INTO flirt_history (guild_id, signature, topic, created_at)
+                VALUES (?, ?, ?, ?)
+            """)
+            cursor.execute(sql, (guild_id, signature[:250], topic[:32], now_iso))
+            conn.commit()
+        except Exception as e:
+            print(f"[Database] Error recording flirt history: {e}")
+        finally:
+            cursor.close()
+            if self.is_postgres:
+                conn.close()
+
+    def get_recent_flirt_signatures(self, guild_id: int, limit: int = 20) -> List[str]:
+        """Lay danh sach signature cac cau flirt gan day cua guild de chong trung lap."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            sql = self._convert_sql("""
+                SELECT signature FROM flirt_history
+                WHERE guild_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+            """)
+            cursor.execute(sql, (guild_id, limit))
+            rows = cursor.fetchall()
+            return [r[0] for r in rows]
+        except Exception as e:
+            print(f"[Database] Error fetching flirt history: {e}")
+            return []
+        finally:
+            cursor.close()
+            if self.is_postgres:
+                conn.close()
+

@@ -5,13 +5,17 @@ import json
 import urllib.request
 import urllib.error
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 REPO = "TranVietHwzg/discord-bot"
 FILES_TO_UPLOAD = [
     "bot.py",
     "database.py",
     "flirt_service.py",
     "relationship_views.py",
-    "requirements.txt"
+    "requirements.txt",
+    "run_full_tests.py"
 ]
 
 def upload_file(token: str, filename: str) -> bool:
