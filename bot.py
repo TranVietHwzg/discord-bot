@@ -4,10 +4,19 @@ import re
 import json
 import socket
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+
+from database import DatabaseRepository
+from flirt_service import FlirtService
+from relationship_views import ProposalView, RELATIONSHIP_NAMES
+
+# Khởi tạo Database Repository và Flirt Service
+db = DatabaseRepository()
+flirt_service = FlirtService()
 
 
 # Đảm bảo in tiếng Việt / emoji trên Windows console và tự động flush log
@@ -340,7 +349,7 @@ async def on_ready():
         print(f"   • {g.name}")
     try:
         await bot.tree.sync()
-        print("⚡ Đã đồng bộ slash command /tomtat")
+        print("⚡ Đã đồng bộ slash command (/tomtat, /flirt, /relationship, /flirt_optout...)")
     except Exception as e:
         print(f"Lỗi sync: {e}")
 
@@ -376,7 +385,359 @@ async def slash_tomtat(interaction: discord.Interaction, thoigian: str = "1h"):
     print("✅ Đã gửi tóm tắt thành công qua Slash Command!")
 
 
-# 3. KÍCH HOẠT KHI NHẬN TIN NHẮN HOẶC TAG @BOT (Chỉ gửi duy nhất 1 Embed)
+# ==========================================
+# 3. LỆNH SLASH COMMAND: /flirt VÀ QUẢN LÝ QUYỀN RIÊNG TƯ
+# ==========================================
+
+@bot.tree.command(name="flirt", description="Gửi lời tán tỉnh/thả thính dễ thương, an toàn tới một thành viên")
+@app_commands.describe(
+    target="Thành viên bạn muốn gửi lời tán tỉnh",
+    style="Phong cách: cute (dễ thương), funny (hài hước), poetic (thơ mộng), genz (trẻ trung)"
+)
+@app_commands.choices(style=[
+    app_commands.Choice(name="Dễ thương (Cute) ✨", value="cute"),
+    app_commands.Choice(name="Hài hước (Funny) 🎭", value="funny"),
+    app_commands.Choice(name="Thơ mộng (Poetic) 📜", value="poetic"),
+    app_commands.Choice(name="Gen Z bắt trend ⚡", value="genz"),
+])
+async def slash_flirt(interaction: discord.Interaction, target: discord.Member, style: Optional[str] = None):
+    # 1. Không cho phép tán tỉnh chính mình
+    if target.id == interaction.user.id:
+        await interaction.response.send_message(
+            "😅 Bạn không thể tự tán tỉnh chính mình đâu nha! Hãy chọn một người bạn khác trong server nhé.",
+            ephemeral=True
+        )
+        return
+
+    # 2. Không cho phép tán tỉnh bot
+    if target.bot:
+        await interaction.response.send_message(
+            "🤖 Bot chỉ là trợ lý ảo thôi, không biết rung động đâu nè! Hãy chọn một thành viên khác trong server nhé.",
+            ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id or 0
+
+    # 3. Kiểm tra cài đặt riêng tư của đối phương (opt-out / block)
+    is_allowed, reason = db.is_flirt_allowed(guild_id, target.id, interaction.user.id)
+    if not is_allowed:
+        if reason == "optout":
+            await interaction.response.send_message(
+                f"🔒 **{target.display_name}** đã tắt tính năng nhận lời tán tỉnh (`/flirt_optout`). Hãy tôn trọng quyền riêng tư của bạn ấy nhé!",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"🔒 Bạn không thể gửi lời tán tỉnh tới **{target.display_name}**.",
+                ephemeral=True
+            )
+        return
+
+    # 4. Kiểm tra rate limit chống spam
+    allowed_rate, limit_msg, _ = flirt_service.rate_limiter.check(interaction.user.id, target.id)
+    if not allowed_rate:
+        await interaction.response.send_message(f"⏳ {limit_msg}", ephemeral=True)
+        return
+
+    # Defer interaction vì việc phân tích ngữ cảnh và gọi AI có thể mất 1-3 giây
+    await interaction.response.defer(thinking=True)
+
+    # 5. Kiểm tra quan hệ tình cảm của requester và target với người thứ ba
+    requester_partner = db.get_active_romantic_partner(guild_id, interaction.user.id)
+    target_partner = db.get_active_romantic_partner(guild_id, target.id)
+
+    # Nếu người gửi đang có người yêu/vợ chồng khác
+    if requester_partner and requester_partner[0] != target.id:
+        partner_m = interaction.guild.get_member(requester_partner[0]) if interaction.guild else None
+        partner_name = partner_m.mention if partner_m else f"<@{requester_partner[0]}>"
+        rel_label = "kết hôn" if requester_partner[1] == "married" else "hẹn hò"
+        embed = discord.Embed(
+            title="👀 Khoan đã nào...",
+            description=(
+                f"Ủa kì nha {interaction.user.mention}! Bạn đang {rel_label} với {partner_name} rồi mà, "
+                f"sao lại đi 'thả thính' {target.mention} thế này? Hãy chung thủy với nửa kia của mình nhé! 🛑"
+            ),
+            color=discord.Color.orange()
+        )
+        await interaction.followup.send(embed=embed)
+        return
+
+    # Nếu người nhận đã có người yêu/vợ chồng khác
+    if target_partner and target_partner[0] != interaction.user.id:
+        partner_m = interaction.guild.get_member(target_partner[0]) if interaction.guild else None
+        partner_name = partner_m.mention if partner_m else f"<@{target_partner[0]}>"
+        rel_label = "kết hôn" if target_partner[1] == "married" else "hẹn hò"
+        embed = discord.Embed(
+            title="🌸 Hoa đã có chủ!",
+            description=(
+                f"Rất tiếc cho {interaction.user.mention} nha! {target.mention} đã {rel_label} với {partner_name} rồi. "
+                f"Tôn trọng hạnh phúc của người khác và đừng 'đập chậu cướp hoa' nhé! 🛡️"
+            ),
+            color=discord.Color.orange()
+        )
+        await interaction.followup.send(embed=embed)
+        return
+
+    # 6. Kiểm tra quan hệ trực tiếp giữa requester và target
+    direct_rel = db.get_relationship(guild_id, interaction.user.id, target.id)
+    scenario = "none"
+    rel_label = ""
+
+    if direct_rel and direct_rel.get("status") == "active":
+        r_type = direct_rel.get("relationship_type")
+        if r_type in ["dating", "married"]:
+            scenario = "couple"
+            rel_label = "Vợ chồng" if r_type == "married" else "Người yêu"
+        elif r_type == "family":
+            scenario = "family"
+            rel_label = "Người trong gia đình"
+
+    # Nếu có quan hệ gia đình ảo: chỉ trêu đùa vui vẻ, không tạo tán tỉnh tình cảm
+    if scenario == "family":
+        embed = discord.Embed(
+            title="👨‍👩‍👧 Người một nhà mà!",
+            description=(
+                f"Nè {interaction.user.mention}, hai bạn đã nhận là người trong gia đình ({rel_label}) rồi đó! "
+                f"Lo mà yêu thương nhau kiểu gia đình đi chứ tán tỉnh gì ở đây hả! 😂"
+            ),
+            color=discord.Color.gold()
+        )
+        await interaction.followup.send(embed=embed)
+        return
+
+    # 7. Thu thập ngữ cảnh an toàn từ 15-25 tin nhắn gần nhất
+    safe_topics = "trò chuyện vui vẻ"
+    if isinstance(interaction.channel, discord.TextChannel):
+        safe_topics = await flirt_service.collect_safe_topics(interaction.channel)
+
+    # 8. Sinh câu tán tỉnh qua Gemini hoặc Fallback template
+    flirt_line = flirt_service.generate_flirt_line(
+        call_gemini_func=call_gemini,
+        requester_name=interaction.user.display_name,
+        target_name=target.display_name,
+        style=style or "cute",
+        recent_topics=safe_topics,
+        relationship_scenario=scenario,
+        relationship_label=rel_label
+    )
+
+    # 9. Gửi lời tán tỉnh công khai trong kênh
+    style_names = {
+        "cute": "Dễ thương ✨",
+        "funny": "Hài hước 🎭",
+        "poetic": "Thơ mộng 📜",
+        "genz": "Gen Z ⚡"
+    }
+    style_display = style_names.get(style.lower() if style else "cute", "Ngọt ngào 💖")
+
+    embed = discord.Embed(
+        title=f"💌 Lời tán tỉnh từ {interaction.user.display_name}",
+        description=f"{target.mention}\n\n> *\"{flirt_line}\"*",
+        color=discord.Color.pink() if scenario == "couple" else discord.Color.blurple(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    if scenario == "couple":
+        embed.set_footer(text=f"Dành riêng cho {rel_label} của mình • Phong cách: {style_display}")
+    else:
+        embed.set_footer(text=f"Người gửi: {interaction.user.display_name} • Phong cách: {style_display}")
+
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="flirt_optout", description="Tắt tính năng nhận lời tán tỉnh từ người khác trong server này")
+async def slash_flirt_optout(interaction: discord.Interaction):
+    guild_id = interaction.guild_id or 0
+    db.set_flirt_preference(guild_id, interaction.user.id, allow_flirt=False)
+    await interaction.response.send_message(
+        "🔒 Bạn đã **tắt** tính năng nhận lời tán tỉnh (`/flirt`) trong server này. Người khác sẽ không thể dùng bot để tán tỉnh bạn nữa.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="flirt_optin", description="Bật lại tính năng nhận lời tán tỉnh từ người khác trong server này")
+async def slash_flirt_optin(interaction: discord.Interaction):
+    guild_id = interaction.guild_id or 0
+    db.set_flirt_preference(guild_id, interaction.user.id, allow_flirt=True)
+    await interaction.response.send_message(
+        "🔓 Bạn đã **bật** lại tính năng nhận lời tán tỉnh (`/flirt`) trong server này.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="flirt_block", description="Chặn một thành viên cụ thể không cho dùng /flirt nhắm đến bạn")
+@app_commands.describe(target="Thành viên bạn muốn chặn")
+async def slash_flirt_block(interaction: discord.Interaction, target: discord.Member):
+    if target.id == interaction.user.id:
+        await interaction.response.send_message("❌ Bạn không thể tự chặn chính mình!", ephemeral=True)
+        return
+    guild_id = interaction.guild_id or 0
+    db.block_user(guild_id, interaction.user.id, target.id)
+    await interaction.response.send_message(
+        f"🚫 Đã chặn **{target.display_name}** không cho dùng `/flirt` với bạn trong server này.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="flirt_unblock", description="Bỏ chặn một thành viên khỏi danh sách chặn /flirt")
+@app_commands.describe(target="Thành viên bạn muốn bỏ chặn")
+async def slash_flirt_unblock(interaction: discord.Interaction, target: discord.Member):
+    guild_id = interaction.guild_id or 0
+    success = db.unblock_user(guild_id, interaction.user.id, target.id)
+    if success:
+        await interaction.response.send_message(f"✅ Đã bỏ chặn **{target.display_name}**.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ Bạn chưa từng chặn **{target.display_name}**.", ephemeral=True)
+
+
+# ==========================================
+# 4. HỆ THỐNG QUẢN LÝ MỐI QUAN HỆ (/relationship)
+# ==========================================
+
+relationship_group = app_commands.Group(name="relationship", description="Quản lý mối quan hệ ảo trong server")
+
+
+@relationship_group.command(name="propose", description="Gửi lời đề nghị thiết lập mối quan hệ với một thành viên")
+@app_commands.describe(
+    target="Thành viên bạn muốn thiết lập mối quan hệ",
+    type="Loại mối quan hệ muốn thiết lập"
+)
+@app_commands.choices(type=[
+    app_commands.Choice(name="Hẹn hò / Người yêu (Dating) 💖", value="dating"),
+    app_commands.Choice(name="Kết hôn / Vợ chồng (Married) 💍", value="married"),
+    app_commands.Choice(name="Gia đình / Người nhà (Family) 🏡", value="family"),
+    app_commands.Choice(name="Bạn thân / Tri kỷ (Friend) 🤝", value="friend"),
+    app_commands.Choice(name="Người yêu cũ (Ex) 🥀", value="ex"),
+])
+async def slash_relationship_propose(interaction: discord.Interaction, target: discord.Member, type: str):
+    if target.id == interaction.user.id:
+        await interaction.response.send_message("❌ Bạn không thể tự thiết lập mối quan hệ với chính mình!", ephemeral=True)
+        return
+
+    if target.bot:
+        await interaction.response.send_message("🤖 Không thể thiết lập mối quan hệ với bot!", ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id or 0
+
+    # Nếu thiết lập hẹn hò/kết hôn: kiểm tra đối phương hoặc bản thân đã có partner chưa
+    if type in ["dating", "married"]:
+        req_partner = db.get_active_romantic_partner(guild_id, interaction.user.id)
+        if req_partner and req_partner[0] != target.id:
+            partner_m = interaction.guild.get_member(req_partner[0]) if interaction.guild else None
+            p_name = partner_m.display_name if partner_m else f"User ID {req_partner[0]}"
+            await interaction.response.send_message(
+                f"❌ Bạn đang có mối quan hệ với **{p_name}**. Hãy dùng `/relationship end` trước khi bắt đầu mối quan hệ mới!",
+                ephemeral=True
+            )
+            return
+
+        tgt_partner = db.get_active_romantic_partner(guild_id, target.id)
+        if tgt_partner and tgt_partner[0] != interaction.user.id:
+            partner_m = interaction.guild.get_member(tgt_partner[0]) if interaction.guild else None
+            p_name = partner_m.display_name if partner_m else f"User ID {tgt_partner[0]}"
+            await interaction.response.send_message(
+                f"❌ **{target.display_name}** hiện đã có mối quan hệ với **{p_name}** trong server này!",
+                ephemeral=True
+            )
+            return
+
+    # Kiểm tra xem 2 người đã có mối quan hệ này chưa
+    existing = db.get_relationship(guild_id, interaction.user.id, target.id)
+    if existing and existing.get("status") == "active" and existing.get("relationship_type") == type:
+        type_name = RELATIONSHIP_NAMES.get(type, type)
+        await interaction.response.send_message(
+            f"ℹ️ Hai bạn đã là **{type_name}** của nhau trong server rồi!",
+            ephemeral=True
+        )
+        return
+
+    type_name = RELATIONSHIP_NAMES.get(type, type)
+    view = ProposalView(db, guild_id, interaction.user, target, type)
+
+    embed = discord.Embed(
+        title="💌 Lời Đề Nghị Mối Quan Hệ",
+        description=(
+            f"{target.mention}, bạn vừa nhận được lời đề nghị thiết lập mối quan hệ từ {interaction.user.mention}!\n\n"
+            f"✨ Mối quan hệ: **{type_name}**\n\n"
+            f"👉 Vui lòng nhấn nút bên dưới để phản hồi (Thời hạn: 2 phút)."
+        ),
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    await interaction.response.send_message(content=target.mention, embed=embed, view=view)
+    view.message = await interaction.original_response()
+
+
+@relationship_group.command(name="status", description="Xem trạng thái mối quan hệ trong server")
+@app_commands.describe(target="Thành viên bạn muốn xem (để trống để xem của bản thân)")
+async def slash_relationship_status(interaction: discord.Interaction, target: Optional[discord.Member] = None):
+    guild_id = interaction.guild_id or 0
+    member = target or interaction.user
+
+    rels = db.get_user_relationships(guild_id, member.id)
+    if not rels:
+        await interaction.response.send_message(
+            f"ℹ️ **{member.display_name}** hiện chưa có mối quan hệ nào được ghi nhận trong server này.",
+            ephemeral=True
+        )
+        return
+
+    lines = []
+    for r in rels:
+        partner_id = r["user_b_id"] if r["user_a_id"] == member.id else r["user_a_id"]
+        partner_m = interaction.guild.get_member(partner_id) if interaction.guild else None
+        partner_mention = partner_m.mention if partner_m else f"<@{partner_id}>"
+        rel_label = RELATIONSHIP_NAMES.get(r["relationship_type"], r["relationship_type"])
+        lines.append(f"• **{rel_label}**: {partner_mention}")
+
+    embed = discord.Embed(
+        title=f"💞 Hồ Sơ Mối Quan Hệ: {member.display_name}",
+        description="\n".join(lines),
+        color=discord.Color.purple(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_footer(text=f"Server: {interaction.guild.name if interaction.guild else ''}")
+    await interaction.response.send_message(embed=embed)
+
+
+@relationship_group.command(name="end", description="Chấm dứt mối quan hệ hiện tại với một thành viên")
+@app_commands.describe(target="Thành viên bạn muốn chấm dứt mối quan hệ")
+async def slash_relationship_end(interaction: discord.Interaction, target: discord.Member):
+    if target.id == interaction.user.id:
+        await interaction.response.send_message("❌ Bạn không thể tự chấm dứt mối quan hệ với chính mình!", ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id or 0
+    existing = db.get_relationship(guild_id, interaction.user.id, target.id)
+
+    if not existing or existing.get("status") != "active":
+        await interaction.response.send_message(
+            f"ℹ️ Bạn và **{target.display_name}** hiện không có mối quan hệ nào đang hoạt động.",
+            ephemeral=True
+        )
+        return
+
+    r_type = existing.get("relationship_type", "")
+    type_name = RELATIONSHIP_NAMES.get(r_type, r_type)
+
+    db.end_relationship(guild_id, interaction.user.id, target.id)
+
+    embed = discord.Embed(
+        title="💔 Mối Quan Hệ Đã Chấm Dứt",
+        description=f"Mối quan hệ **{type_name}** giữa {interaction.user.mention} và {target.mention} đã chính thức kết thúc.",
+        color=discord.Color.dark_grey(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+# Đăng ký relationship_group vào bot tree
+bot.tree.add_group(relationship_group)
+
+
+# 5. KÍCH HOẠT KHI NHẬN TIN NHẮN HOẶC TAG @BOT (Chỉ gửi duy nhất 1 Embed)
 @bot.event
 async def on_message(message: discord.Message):
     if message.author == bot.user:
