@@ -11,11 +11,8 @@ if hasattr(sys.stdout, "reconfigure"):
 REPO = "TranVietHwzg/discord-bot"
 FILES_TO_UPLOAD = [
     "bot.py",
-    "database.py",
-    "flirt_service.py",
-    "relationship_views.py",
     "requirements.txt",
-    "run_full_tests.py"
+    "README.md"
 ]
 
 def upload_file(token: str, filename: str) -> bool:
